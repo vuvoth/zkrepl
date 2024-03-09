@@ -6,14 +6,14 @@
 import { Buffer } from "buffer-es6"
 ;(globalThis as any).Buffer = Buffer
 
-import { WASI, WASIExitError, WASIKillError } from "circom2/vendor/wasi"
+import { WASI, WASIExitError, WASIKillError } from "circom2mpc/vendor/wasi"
 import * as path from "path-browserify"
 import { WasmFs } from "@wasmer/wasmfs"
 import { unzip } from "unzipit"
 
 import circomspectWasmURL from "circomspect/circomspect.wasm?url"
 import circomLib from "../data/circomlib.zip?url"
-import circomWasmURL from "circom2/circom.wasm?url"
+import circomWasmURL from "circom2mpc/circom.wasm?url"
 import getLibraryUrlMap from "./libraries"
 
 const baseNow = Math.floor((Date.now() - performance.now()) * 1e-3)
@@ -282,17 +282,21 @@ export async function runCircom(
     const wasm = await loadWasm(circomWasmURL)
 
     await runLoop(async (fsBindings) => {
+
+        console.log("debug",  [
+            "circom2mpc",
+            "--input",
+            fileName,
+        ] as string[]);
         let wasi = new WASI({
             // Arguments passed to the Wasm Module
             // The first argument is usually the filepath to the executable WASI module
             // we want to run.
             args: [
-                "circom2",
+                "circom2mpc",
+                "--input",
                 fileName,
-                !options.nor1cs && "--r1cs",
-                !options.nowasm && "--wasm",
-                !options.nosym && "--sym",
-            ].filter((k) => k !== false) as string[],
+            ],
 
             // Environment variables that are accesible to the WASI module
             env: {

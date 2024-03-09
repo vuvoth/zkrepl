@@ -53,14 +53,7 @@ async function bootWasm(files: File[]) {
     const zkreplFlags = /\/\/\s*zkrepl:\s*(.*)/i.exec(mainCode)
     const flags = zkreplFlags ? zkreplFlags[1].split(/[\s,]+/) : []
 
-    const opts = {
-        nowasm: flags.includes("nowasm"),
-        nor1cs: flags.includes("nor1cs"),
-        nosym: flags.includes("nosym"),
-        nowtns: flags.includes("nowtns"),
-    }
-
-    await runCircom(fileName, opts)
+    await runCircom(fileName)
 
     const stderr = wasmFs.fs.readFileSync("/dev/stderr", "utf8")
     // console.log(stderr)
@@ -76,115 +69,31 @@ async function bootWasm(files: File[]) {
             )}s`,
     })
 
-    let witness
-    let logs: string[] = []
-    let wasmData
-    let r1csFile
+    let circuit_config = wasmFs.fs.readFileSync(
+        `output/main.json`, 'utf8'
+    );
 
-    if (!opts.nowasm) {
-        wasmData = wasmFs.fs.readFileSync(
-            `${filePrefix}_js/${filePrefix}.wasm`
-        ) as Buffer
 
-        if (!opts.nowtns) {
-            witness = await witnessBuilder(wasmData, {
-                log(message: bigint) {
-                    logs.push(message.toString())
-                },
-            })
-        }
-    }
-    let r1cs
-    if (!opts.nor1cs) {
-        r1csFile = wasmFs.fs.readFileSync(`${filePrefix}.r1cs`)
-        const { fd: fdR1cs, sections: sectionsR1cs } =
-            await binFileUtils.readBinFile(
-                r1csFile,
-                "r1cs",
-                1,
-                1 << 22,
-                1 << 24
-            )
-        r1cs = await readR1csHeader(
-            fdR1cs,
-            sectionsR1cs,
-            /* singleThread */ true
-        )
-        await fdR1cs.close()
-    }
+    // const input = /\/*\s*INPUT\s*=\s*(\{[\s\S]+\})\s*\*\//.exec(mainCode)
+    // let inputObj: Record<string, string | string[]> = {}
+    // if (input) {
+    //     inputObj = JSON.parse(input[1])
+    //     parsedInputJSON = inputObj
+    // } else if (r1cs && r1cs.nPrvInputs + r1cs.nPubInputs > 0) {
+    //     postMessage({
+    //         type: "stderr",
+    //         text: `To specify inputs, add to your circuit: \n\nINPUT = { "a": "1234" }`,
+    //     })
+    // }
+    // try {
+    //     if (witness) wtnsFile = await witness.calculateWTNSBin(inputObj, true)
+    // } finally {
+    //     if (logs.length > 0) postMessage({ type: "log", text: logs.join("\n") })
+    // }
 
-    const input = /\/*\s*INPUT\s*=\s*(\{[\s\S]+\})\s*\*\//.exec(mainCode)
-    let inputObj: Record<string, string | string[]> = {}
-    if (input) {
-        inputObj = JSON.parse(input[1])
-        parsedInputJSON = inputObj
-    } else if (r1cs && r1cs.nPrvInputs + r1cs.nPubInputs > 0) {
-        postMessage({
-            type: "stderr",
-            text: `To specify inputs, add to your circuit: \n\nINPUT = { "a": "1234" }`,
-        })
-    }
-    try {
-        if (witness) wtnsFile = await witness.calculateWTNSBin(inputObj, true)
-    } finally {
-        if (logs.length > 0) postMessage({ type: "log", text: logs.join("\n") })
-    }
 
-    // console.log(witness)
+    postMessage({type: 'log', text: circuit_config})
 
-    if (r1cs && r1cs.nOutputs > 0) {
-        const { fd: fdWtns, sections: sectionsWtns } =
-            await binFileUtils.readBinFile(
-                wtnsFile,
-                "wtns",
-                2,
-                1 << 25,
-                1 << 23
-            )
-
-        const wtns = await readWtnsHeader(fdWtns, sectionsWtns)
-        const buffWitness = await binFileUtils.readSection(
-            fdWtns,
-            sectionsWtns,
-            2
-        )
-
-        let outputPrefixes: Record<number, string> = {}
-        if (!opts.nosym) {
-            const symFile = wasmFs.fs.readFileSync(
-                `${filePrefix}.sym`
-            ) as Uint8Array
-            let lastPos = 0
-            let dec = new TextDecoder("utf-8")
-            for (let i = 0; i < symFile.length; i++) {
-                if (symFile[i] === 0x0a) {
-                    let line = dec.decode(symFile.slice(lastPos, i))
-                    let wireNo = +line.split(",")[0]
-
-                    if (wireNo <= r1cs.nOutputs) {
-                        outputPrefixes[wireNo] =
-                            line.split(",")[3].replace("main.", "") + " = "
-                    }
-
-                    lastPos = i
-                }
-            }
-        }
-        let outputSignals = []
-        for (let i = 1; i <= r1cs.nOutputs; i++) {
-            const b = buffWitness.slice(i * wtns.n8, i * wtns.n8 + wtns.n8)
-            const outputPrefix = outputPrefixes[i] || ""
-            outputSignals.push(outputPrefix + Scalar.fromRprLE(b).toString())
-        }
-        postMessage({
-            type: "Output",
-            text: outputSignals.join("\n"),
-        })
-
-        await fdWtns.close()
-    }
-
-    // console.log(r1cs)
     const elapsed = performance.now() - startTime
 
     postMessage({
@@ -193,17 +102,7 @@ async function bootWasm(files: File[]) {
         done: true,
         files: Object.fromEntries(
             Object.entries({
-                [`${filePrefix}.wasm`]: wasmData,
-                [`${filePrefix}.js`]:
-                    wasmData &&
-                    wasmFs.fs.readFileSync(
-                        `${filePrefix}_js/witness_calculator.js`
-                    ),
-                [`${filePrefix}.wtns`]:
-                    !opts.nowtns && !opts.nowasm && wtnsFile,
-                [`${filePrefix}.r1cs`]: r1csFile,
-                [`${filePrefix}.sym`]:
-                    !opts.nosym && wasmFs.fs.readFileSync(`${filePrefix}.sym`),
+                [`${filePrefix}.json`]: circuit_config,
             }).filter(([key, val]) => val)
         ),
     })
@@ -281,6 +180,7 @@ onmessage = (e: MessageEvent) => {
     if (data.type === "run") {
         bootWasm(data.files)
             .catch((err) => {
+                console.log('error');
                 postMessage({ type: "fail", done: true, text: err.message })
             })
             .then(() => {
